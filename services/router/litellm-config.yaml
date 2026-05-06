@@ -1,0 +1,17 @@
+model_list:
+  - model_name: tiny
+    litellm_params:
+      model: ollama/qwen2.5:0.5b
+      api_base: os.environ/OLLAMA_HOST
+    model_info:
+      mode: chat
+      max_tokens: 2048
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  request_timeout: 60
+  num_retries: 2
+
+general_settings:
+  master_key: os.environ/ROUTER_MASTER_KEY
