@@ -361,8 +361,18 @@ async def lifespan(app: FastAPI):
         password=settings.redis_password or None,
         decode_responses=True,
     )
-    await redis_client.ping()
-    log.info("✅ Redis connected")
+    for attempt in range(1, 11):
+        try:
+            await redis_client.ping()
+            log.info(f"✅ Redis connected (attempt {attempt})")
+            break
+        except Exception as e:
+            if attempt == 10:
+                log.error(f"❌ Redis connection failed after 10 attempts: {e}")
+                raise
+            wait = min(2 ** attempt, 30)
+            log.warning(f"Redis connect attempt {attempt} failed: {e}. Retrying in {wait}s...")
+            await asyncio.sleep(wait)
 
     http_client = httpx.AsyncClient(timeout=settings.request_timeout)
     log.info("✅ HTTP client ready")

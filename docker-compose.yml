@@ -1,0 +1,274 @@
+# ─────────────────────────────────────────────────────────
+# LLM Inference Platform — Local Dev Stack
+# 9 services: ollama, redis, postgres, router, worker,
+#             cost-tracker, prometheus, grafana, jaeger
+# ─────────────────────────────────────────────────────────
+
+name: llm-platform
+
+networks:
+  llm-net:
+    driver: bridge
+
+volumes:
+  ollama-data:
+  redis-data:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
+
+# ──────────────────────────────────────────
+# Reusable logging config
+# ──────────────────────────────────────────
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  # ──────────────────────────────────────────
+  # Ollama — local LLM inference
+  # ──────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    networks: [llm-net]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+
+  # ──────────────────────────────────────────
+  # Redis — queue + pub/sub
+  # ──────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    networks: [llm-net]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ──────────────────────────────────────────
+  # Postgres — cost data persistence
+  # ──────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    networks: [llm-net]
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+  # ──────────────────────────────────────────
+  # Router — LiteLLM proxy
+  # ──────────────────────────────────────────
+  router:
+    image: router:local
+    build:
+      context: ./services/router
+    container_name: router
+    networks: [llm-net]
+    ports:
+      - "${ROUTER_PORT}:4000"
+    environment:
+      ROUTER_MASTER_KEY: ${ROUTER_MASTER_KEY}
+      OLLAMA_HOST:       ${OLLAMA_HOST}
+      LOG_LEVEL:         ${LOG_LEVEL}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ──────────────────────────────────────────
+  # Cost-Tracker — FinOps service
+  # ──────────────────────────────────────────
+  cost-tracker:
+    image: cost-tracker:local
+    build:
+      context: ./services/cost-tracker
+    container_name: cost-tracker
+    networks: [llm-net]
+    ports:
+      - "${COST_TRACKER_PORT}:8001"
+    environment:
+      DATABASE_URL:   ${DATABASE_URL}
+      REDIS_HOST:     ${REDIS_HOST}
+      REDIS_PORT:     ${REDIS_PORT}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      LOG_LEVEL:      ${LOG_LEVEL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ──────────────────────────────────────────
+  # Worker — async job processor
+  # ──────────────────────────────────────────
+  worker:
+    image: worker:local
+    build:
+      context: ./services/worker
+    container_name: worker
+    networks: [llm-net]
+    ports:
+      - "${WORKER_PORT}:8002"
+    environment:
+      REDIS_HOST:           ${REDIS_HOST}
+      REDIS_PORT:           ${REDIS_PORT}
+      REDIS_PASSWORD:       ${REDIS_PASSWORD}
+      ROUTER_URL:           ${ROUTER_URL}
+      ROUTER_MASTER_KEY:    ${ROUTER_MASTER_KEY}
+      WORKER_CONCURRENCY:   ${WORKER_CONCURRENCY}
+      MAX_INFLIGHT:         ${WORKER_MAX_INFLIGHT}
+      LOG_LEVEL:            ${LOG_LEVEL}
+    depends_on:
+      redis:
+        condition: service_healthy
+      router:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ──────────────────────────────────────────
+  # Prometheus — metrics
+  # ──────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    networks: [llm-net]
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────────────────────
+  # Grafana — dashboards
+  # ──────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    networks: [llm-net]
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      GF_SECURITY_ADMIN_USER:     ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_AUTH_ANONYMOUS_ENABLED:  "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_PATHS_PROVISIONING:      /etc/grafana/provisioning
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ──────────────────────────────────────────
+  # Jaeger — distributed tracing (UI ready, SDKs in Stage 3)
+  # ──────────────────────────────────────────
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    networks: [llm-net]
+    ports:
+      - "${JAEGER_PORT}:16686"   # UI
+      - "4318:4318"              # OTLP HTTP (for future SDKs)
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:16686/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

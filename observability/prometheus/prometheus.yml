@@ -1,0 +1,44 @@
+# Prometheus scrape configuration for the LLM platform
+# Each job_name becomes a label on every metric scraped from that target
+
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: local-dev
+    environment: local
+
+scrape_configs:
+  # Prometheus itself (self-monitoring)
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: prometheus
+
+  # Router (LiteLLM proxy)
+  - job_name: router
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['router:4000']
+        labels:
+          service: router
+          tier: gateway
+
+  # Worker (async job processor)
+  - job_name: worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['worker:8002']
+        labels:
+          service: worker
+          tier: processor
+
+  # Cost-tracker (FinOps service)
+  - job_name: cost-tracker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['cost-tracker:8001']
+        labels:
+          service: cost-tracker
+          tier: finops
