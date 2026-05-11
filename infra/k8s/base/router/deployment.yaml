@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: router
+  namespace: llm-platform
+  labels:
+    app: router
+    app.kubernetes.io/name: router
+    app.kubernetes.io/part-of: llm-platform
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: router
+  template:
+    metadata:
+      labels:
+        app: router
+        app.kubernetes.io/name: router
+        app.kubernetes.io/component: gateway
+      annotations:
+        # Annotation for Prometheus to discover and scrape (Stage 3)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Schedule on app worker nodes (label from Step 10)
+      # If your cluster only has 1 worker, this still works (just no constraint)
+      nodeSelector:
+        workload: apps
+      
+      containers:
+        - name: router
+          image: router:local
+          imagePullPolicy: Never  # Use kind-loaded image, don't pull from registry
+
+          ports:
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+
+          # Env from shared ConfigMap (REDIS_HOST, OLLAMA_HOST, LOG_LEVEL, etc.)
+          envFrom:
+            - configMapRef:
+                name: shared-config
+            - configMapRef:
+                name: router-config
+            - secretRef:
+                name: router-secret  # ROUTER_MASTER_KEY
+
+          # Mount LiteLLM config file from ConfigMap
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+
+          # Liveness: is the pod alive? Restart if not.
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Readiness: can it accept traffic? Remove from Service if not.
+          readinessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Resource hints — schedule + protect node
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+      # Volumes the container mounts
+      volumes:
+        - name: config
+          configMap:
+            name: router-config
+            items:
+              - key: litellm-config.yaml
+                path: litellm-config.yaml

@@ -1,0 +1,25 @@
+# Shared config used by multiple services.
+# Service-specific config goes in <service>/configmap.yaml.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shared-config
+  namespace: llm-platform
+data:
+  # Common settings
+  ENV: local
+  LOG_LEVEL: INFO
+
+  # Service URLs (k8s DNS — service.namespace.svc.cluster.local)
+  REDIS_HOST: redis.llm-platform.svc.cluster.local
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ""
+
+  POSTGRES_HOST: postgres.llm-platform.svc.cluster.local
+  POSTGRES_PORT: "5432"
+
+  OLLAMA_HOST: http://ollama.llm-platform.svc.cluster.local:11434
+  OLLAMA_DEFAULT_MODEL: qwen2.5:0.5b
+
+  ROUTER_URL: http://router.llm-platform.svc.cluster.local:4000

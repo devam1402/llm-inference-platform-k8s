@@ -1,0 +1,27 @@
+# Router-specific config.
+# Mounts litellm-config.yaml as a file inside the pod at /app/config/litellm-config.yaml
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: router-config
+  namespace: llm-platform
+data:
+  # Non-secret env vars for the router pod
+  PORT: "4000"
+
+  # LiteLLM proxy config (mounted as a file)
+  litellm-config.yaml: |
+    model_list:
+      - model_name: tiny
+        litellm_params:
+          model: ollama/qwen2.5:0.5b
+          api_base: os.environ/OLLAMA_HOST
+
+    general_settings:
+      master_key: os.environ/ROUTER_MASTER_KEY
+
+    litellm_settings:
+      drop_params: true
+      set_verbose: false
+      cache: false

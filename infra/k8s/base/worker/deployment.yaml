@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: llm-platform
+  labels:
+    app: worker
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/part-of: llm-platform
+    app.kubernetes.io/component: processor
+spec:
+  replicas: 1   # Stage 4 will scale this with KEDA based on queue depth
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+        app.kubernetes.io/name: worker
+        app.kubernetes.io/component: processor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8002"
+        prometheus.io/path: "/metrics"
+    spec:
+      nodeSelector:
+        workload: apps
+
+      # Give the worker time to drain in-flight jobs on shutdown
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: worker
+          image: worker:local
+          imagePullPolicy: Never
+
+          ports:
+            - name: http
+              containerPort: 8002
+              protocol: TCP
+
+          # Worker needs Redis (queue) + router (to call) + auth key
+          envFrom:
+            - configMapRef:
+                name: shared-config       # REDIS_HOST, ROUTER_URL, etc.
+            - secretRef:
+                name: router-secret       # ROUTER_MASTER_KEY (worker calls router auth'd)
+
+          # Worker-specific env (override or add)
+          env:
+            - name: WORKER_CONCURRENCY
+              value: "4"
+            - name: MAX_INFLIGHT
+              value: "8"
+
+          # Liveness: simple healthcheck (no Redis dependency)
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8002
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Readiness: checks Redis + Router connectivity
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8002
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Resources — worker does CPU work (LLM call coordination)
+          resources:
+            requests:
+              cpu: "150m"
+              memory: "192Mi"
+            limits:
+              cpu: "750m"
+              memory: "512Mi"
+
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL

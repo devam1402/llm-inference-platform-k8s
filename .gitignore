@@ -71,3 +71,4 @@ credentials.json
 # Build artifacts
 *.tar
 *.tar.gz
+infra/k8s/base/01-secrets.yaml

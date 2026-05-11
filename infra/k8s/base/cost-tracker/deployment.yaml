@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cost-tracker
+  namespace: llm-platform
+  labels:
+    app: cost-tracker
+    app.kubernetes.io/name: cost-tracker
+    app.kubernetes.io/part-of: llm-platform
+    app.kubernetes.io/component: finops
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: cost-tracker
+  template:
+    metadata:
+      labels:
+        app: cost-tracker
+        app.kubernetes.io/name: cost-tracker
+        app.kubernetes.io/component: finops
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Schedule on the apps node
+      nodeSelector:
+        workload: apps
+
+      containers:
+        - name: cost-tracker
+          image: cost-tracker:local
+          imagePullPolicy: Never
+
+          ports:
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+
+          # Pulls env from BOTH the shared ConfigMap and the postgres Secret
+          envFrom:
+            - configMapRef:
+                name: shared-config       # REDIS_HOST, REDIS_PORT, LOG_LEVEL, etc.
+            - secretRef:
+                name: postgres-secret     # DATABASE_URL, POSTGRES_USER/PASSWORD/DB
+
+          # Liveness: simple "alive?" check (does NOT touch DB/Redis)
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Readiness: DOES check DB + Redis connectivity
+          # If DB/Redis are down → pod marked NotReady → removed from Service
+          # If DB/Redis recover → pod becomes Ready again automatically
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Resource hints
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          # Security context — run as non-root user
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # SQLAlchemy may need /tmp
+            capabilities:
+              drop:
+                - ALL
