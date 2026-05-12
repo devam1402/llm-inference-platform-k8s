@@ -9,9 +9,9 @@ metadata:
     app.kubernetes.io/part-of: llm-platform
     app.kubernetes.io/component: inference
 spec:
-  replicas: 1   # CPU inference doesn't scale well horizontally
+  replicas: 1
   strategy:
-    type: Recreate   # Stateful-ish: ensure old pod is fully gone before new one
+    type: Recreate
   selector:
     matchLabels:
       app: ollama
@@ -22,12 +22,10 @@ spec:
         app.kubernetes.io/name: ollama
         app.kubernetes.io/component: inference
     spec:
-      # Schedule on data-tier node (where heavier workloads go)
-      # Falls back to any node if no node has this label
+      # Schedule on node with workload-data label (combined worker has this)
       nodeSelector:
-        workload: data
+        workload-data: "true"
 
-      # Tolerate longer startup
       terminationGracePeriodSeconds: 30
 
       containers:
@@ -45,17 +43,14 @@ spec:
               value: "0.0.0.0:11434"
             - name: OLLAMA_KEEP_ALIVE
               value: "24h"
-            # Disable model pre-loading on startup (we'll pull manually)
             - name: OLLAMA_NUM_PARALLEL
               value: "1"
 
-          # Mount volume for model storage
           volumeMounts:
             - name: ollama-data
               mountPath: /root/.ollama
 
-          # TCP probe — Ollama doesn't have a clean /health endpoint
-          # k8s just checks if the port accepts a TCP connection
+          # TCP probes — Ollama doesn't expose clean HTTP health endpoints
           livenessProbe:
             tcpSocket:
               port: 11434
@@ -72,20 +67,19 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
 
-          # Higher resources for LLM inference
           resources:
             requests:
               cpu: "500m"
               memory: "1Gi"
             limits:
-              cpu: "2000m"   # 2 full CPUs
-              memory: "4Gi"  # 4 GB
+              cpu: "2000m"
+              memory: "4Gi"
 
       volumes:
-        # emptyDir: tied to pod lifetime
-        # Survives container restarts in the same pod
-        # LOST if pod is deleted/rescheduled (re-download model)
-        # Step 12 shows how to use a real PersistentVolumeClaim
+        # emptyDir: tied to pod lifetime.
+        # Survives container restarts in the same pod.
+        # LOST if pod is deleted/rescheduled.
+        # Step 12 will show PersistentVolumeClaim for true persistence.
         - name: ollama-data
           emptyDir:
             sizeLimit: 5Gi

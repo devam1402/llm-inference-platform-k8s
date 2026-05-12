@@ -19,7 +19,7 @@ data:
   POSTGRES_HOST: postgres.llm-platform.svc.cluster.local
   POSTGRES_PORT: "5432"
 
-  OLLAMA_HOST: http://ollama.llm-platform.svc.cluster.local:11434
+  OLLAMA_HOST: http://ollama-mock.llm-platform.svc.cluster.local:11434
   OLLAMA_DEFAULT_MODEL: qwen2.5:0.5b
 
   ROUTER_URL: http://router.llm-platform.svc.cluster.local:4000

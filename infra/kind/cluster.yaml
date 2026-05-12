@@ -1,7 +1,7 @@
 # kind cluster configuration for the LLM Inference Platform
-# 3 nodes: 1 control-plane + 2 workers
-# Node labels separate "apps" and "data" workloads
-# Port mappings expose Ingress + smoke-test ports to localhost
+# 2 nodes: 1 control-plane + 1 worker
+# Worker has combined labels (apps + data) to host all workload types
+# Port mappings expose service NodePorts to localhost
 
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -13,9 +13,7 @@ name: llm-platform
 networking:
   apiServerAddress: "127.0.0.1"
   apiServerPort: 6443
-  # Pod network CIDR
   podSubnet: "10.244.0.0/16"
-  # Service network CIDR
   serviceSubnet: "10.96.0.0/12"
 
 # ──────────────────────────────────────────
@@ -26,7 +24,6 @@ nodes:
   # ── Control plane ──────────────────────
   - role: control-plane
     image: kindest/node:v1.31.0
-    # Port mappings: container port → host port
     extraPortMappings:
       # Ingress (Stage 6 will use these)
       - containerPort: 80
@@ -35,34 +32,25 @@ nodes:
       - containerPort: 443
         hostPort: 443
         protocol: TCP
-      # NodePort range — exposes services to localhost
-      # We'll map specific service NodePorts to host ports here
-      # Router (port 4000)
+      # NodePort range mapped to host ports (same as docker-compose)
       - containerPort: 30400
         hostPort: 4000
         protocol: TCP
-      # Worker (port 8002)
       - containerPort: 30800
         hostPort: 8002
         protocol: TCP
-      # Cost-tracker (port 8001)
       - containerPort: 30801
         hostPort: 8001
         protocol: TCP
-      # Prometheus (port 9090) — Stage 3 will use this
       - containerPort: 30909
         hostPort: 9090
         protocol: TCP
-      # Grafana (port 3000) — Stage 3 will use this
       - containerPort: 30300
         hostPort: 3000
         protocol: TCP
-      # Jaeger (port 16686) — Stage 3 will use this
       - containerPort: 30166
         hostPort: 16686
         protocol: TCP
-    # Disable default scheduling on control-plane
-    # (control-plane only runs system pods, not user workloads)
     kubeadmConfigPatches:
       - |
         kind: InitConfiguration
@@ -70,16 +58,12 @@ nodes:
           kubeletExtraArgs:
             node-labels: "ingress-ready=true"
 
-  # ── Worker 1 — apps node (router, worker, cost-tracker) ──
+  # ── Worker — combined apps + data tier (single-worker setup) ──
+  # Multiple labels let this one node host both app and data workloads.
+  # Production would split these into separate node pools (Stage 7).
   - role: worker
     image: kindest/node:v1.31.0
     labels:
       workload: apps
-      tier: stateless
-
-  # ── Worker 2 — data node (postgres, redis, ollama) ──
-  - role: worker
-    image: kindest/node:v1.31.0
-    labels:
-      workload: data
-      tier: stateful
+      workload-data: "true"
+      tier: combined
